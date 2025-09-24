@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.env
+.serena/*
+.task_results/*
+.final_report.md
+progress.md
+CLAUDE.md
+.vscode/*
