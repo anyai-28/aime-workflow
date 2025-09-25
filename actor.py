@@ -1,5 +1,5 @@
 import re
-from openai import OpenAI
+from langfuse import observe
 
 from utils import call_llm_with_retry
 
@@ -10,11 +10,10 @@ class DynamicActor:
     ReActフレームワークに基づいて動作する。
     """
 
-    def __init__(self, subtask: dict, persona: str, knowledge: str, tools: dict, openai_client: OpenAI, progress_manager):
+    def __init__(self, subtask: dict, persona: str, knowledge: str, tools: dict, progress_manager):
         self.subtask = subtask
         self.persona = persona
         self.knowledge = knowledge
-        self.client = openai_client
         self.progress_manager = progress_manager
         self.history = []
         self.max_turns = 7
@@ -33,7 +32,14 @@ class DynamicActor:
 
     def _build_prompt(self):
         """LLMに送るプロンプトを構築する"""
-        tool_descriptions = "\n".join([f"- {name}: {func.__doc__.strip()}" for name, func in self.available_tools.items()])
+        finish_desc = """finish(report: str): 全ての作業が完了した際に呼び出す最終報告ツール。引数には必ず {"status": "success" or "failure", "message": "成果物 or 失敗理由"} という形式のJSON文字列を指定してください。
+- 成功した場合: {"status": "success", "message": "ここにMarkdown形式で最終成果物を記述"}
+- 失敗した場合: {"status": "failure", "message": "ここに失敗した具体的な理由を記述"}"""
+
+        tool_descriptions = "\n".join(
+            [f"- {name}: {func.__doc__.strip()}" for name, func in self.available_tools.items() if name != "finish"]
+        )
+        tool_descriptions += f"\n- finish: {finish_desc}"
 
         history_str = ""
         if not self.history:
@@ -65,10 +71,11 @@ class DynamicActor:
 3.  **進捗報告:** タスクの実行中に重要な中間結果や問題を発見した場合は、`update_progress`ツールを使って状況を報告してください。これは計画全体を調整するために重要な情報となります。
 
 **最重要指示:**
-タスクを達成するために必要な情報がすべて集まったと判断したら、**必ず `finish` ツールを呼び出してください。**
-`finish` ツールの引数には、**単なる最後の思考ではなく、これまでの全プロセス（特に『観察』で得られた情報）を総合的に要約した、タスクに対する完全な最終成果物**をMarkdown形式で記述してください。
-この成果物は、他の人があなたの作業内容を知らなくても理解できるように、自己完結している必要があります。
-例：finish[最終的な旅程はこちらです...]
+タスクを達成するために必要な情報がすべて集まった、あるいはタスクの遂行が不可能だと判断したら、**必ず `finish` ツールをJSON形式の引数で呼び出してください。**
+`"status"`キーには`"success"`または`"failure"`を、`"message"`キーには成功した場合は完全な最終成果物を、失敗した場合はその具体的な理由を記述してください。
+例 (成功): `finish[{{"status": "success", "message": "# 東京観光プラン\\n\\n## 1日目..."}}]`
+例 (失敗): `finish[{{"status": "failure", "message": "指定された条件での航空券が見つかりませんでした。"}}]`
+
 
 次に取るべきあなたの思考を記述してください。
 思考:"""
@@ -102,14 +109,14 @@ class DynamicActor:
 
         return thought, tool_name, arg
 
+    @observe(name="Actor-Execution")
     def run(self):
         """ReActループを実行してサブタスクを遂行する"""
         for i in range(self.max_turns):
             prompt = self._build_prompt()
 
             response = call_llm_with_retry(
-                client=self.client,
-                model="gpt-4o",
+                model="openai/gpt-4o",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
             )

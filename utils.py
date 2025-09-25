@@ -1,9 +1,10 @@
 import time
-from openai import OpenAI, RateLimitError
+import litellm
+from litellm import RateLimitError
 
 
 def call_llm_with_retry(
-    client: OpenAI, model: str, messages: list, temperature: float, response_format: dict = None, max_retries: int = 3
+    model: str, messages: list, temperature: float, response_format: dict = None, max_retries: int = 3, **kwargs
 ):
     """指数バックオフ付きでLLM APIを呼び出す"""
     delay = 5
@@ -13,11 +14,12 @@ def call_llm_with_retry(
                 "model": model,
                 "messages": messages,
                 "temperature": temperature,
+                **kwargs,
             }
             if response_format:
                 params["response_format"] = response_format
 
-            response = client.chat.completions.create(**params)
+            response = litellm.completion(**params)
             return response
         except RateLimitError:
             print(f"レートリミットエラー。{delay}秒待って再試行します... ({attempt + 1}/{max_retries})")

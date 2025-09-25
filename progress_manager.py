@@ -25,7 +25,9 @@ class ProgressManagementModule:
                 marker = "[x]"
             elif task["status"] == "in_progress":
                 marker = "[-]"
-            else:  # pending or failed
+            elif task["status"] == "failed":
+                marker = "[//]"
+            else:  # pending
                 marker = "[ ]"
             md_content += f"- {marker} {task['description']}\n"
 
@@ -34,8 +36,10 @@ class ProgressManagementModule:
                 for log_entry in task["logs"]:
                     md_content += f"  - 📝 Log: {log_entry}\n"
 
-            if task["status"] == "completed" and task["result"]:
-                md_content += f"  - **Result:** {str(task['result'])[:150]}...\n"
+            # if task["status"] == "completed" and task["result"]:
+            #     md_content += f"  - **Result:** {str(task['result'])[:150]}...\n"
+            if task["status"] == "failed" and task["result"]:
+                md_content += f"  - **failed:** {str(task['result'])[:100]}...\n"
 
         with open(self.filepath, "w", encoding="utf-8") as f:
             f.write(md_content)
@@ -153,6 +157,8 @@ class ProgressManagementModule:
                     marker = "[x]"
                 elif task["status"] == "in_progress":
                     marker = "[-]"
+                elif task["status"] == "failed":
+                    marker = "[//]"
                 else:
                     marker = "[ ]"
                 print(f"{marker} {task['description']}")

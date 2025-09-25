@@ -1,6 +1,7 @@
-from openai import OpenAI
 from actor import DynamicActor
 from tools import web_search, finish
+from langfuse import observe
+from utils import call_llm_with_retry
 
 
 class ActorFactory:
@@ -9,11 +10,11 @@ class ActorFactory:
     ペルソナはLLMによって動的に生成される。
     """
 
-    def __init__(self, openai_client: OpenAI, progress_manager):
-        self.client = openai_client
+    def __init__(self, progress_manager):
         self.progress_manager = progress_manager
         self.base_tools = {"finish": finish, "web_search": web_search}
 
+    @observe()
     def _generate_persona(self, subtask_description: str) -> str:
         """LLMを使ってサブタスクに最適なペルソナを生成する"""
         print("    L Factory: LLMに最適なペルソナを問い合わせ中...")
@@ -28,8 +29,8 @@ class ActorFactory:
 ペルソナ:
 """
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+            response = call_llm_with_retry(
+                model="openai/gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=50,
@@ -40,6 +41,7 @@ class ActorFactory:
             print(f"    L Factory: ペルソナ生成中にエラーが発生しました: {e}")
             return "多才なアシスタント。"  # エラー時はデフォルトを返す
 
+    @observe()
     def create_actor(self, subtask: dict) -> DynamicActor:
         """
         サブタスクを分析し、適切なペルソナ、知識、ツールを持つActorを生成する
@@ -66,6 +68,5 @@ class ActorFactory:
             persona=persona,
             knowledge=knowledge,
             tools=tools,
-            openai_client=self.client,
             progress_manager=self.progress_manager,
         )

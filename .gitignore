@@ -10,8 +10,8 @@ wheels/
 .venv
 .env
 .serena/*
-.task_results/*
-.final_report.md
+task_results/
+final_report.md
 progress.md
 CLAUDE.md
 .vscode/*

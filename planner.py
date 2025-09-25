@@ -1,40 +1,40 @@
 import json
 import time
 import os
-from openai import OpenAI
 from progress_manager import ProgressManagementModule
 from factory import ActorFactory
 from concurrent.futures import ThreadPoolExecutor
+from langfuse import observe
 
 from utils import call_llm_with_retry
 
 
 class DynamicPlanner:
-    def __init__(self, openai_client: OpenAI, max_parallel_actors: int = 4):
-        self.client = openai_client
+    def __init__(self, max_parallel_actors: int = 4):
         self.progress_manager = ProgressManagementModule()
-        self.factory = ActorFactory(openai_client, self.progress_manager)
+        self.factory = ActorFactory(self.progress_manager)
         self.results_dir = "task_results"
         self.max_parallel_actors = max_parallel_actors
         self.main_goal = ""
 
+    @observe()
     def _decompose_task(self, main_goal: str) -> list[dict]:
         """LLMを使い、依存関係を含むサブタスクのリストに分解する"""
         prompt = f"""
 ユーザーの複雑なリクエストを、実行可能なサブタスクのリストに細分化してください。
 各サブタスクには一意のIDを0から振り、他のタスクに依存する場合はそのIDをリストで指定してください。
 依存関係がなければ空リスト `[]` とします。タスクは論理的な順序で定義してください。
+タスクは必ず複数に分解して定義してください。
 出力は以下のJSON形式の配列でなければなりません:
 `[{{"id": 0, "description": "タスク1", "dependencies": []}}, {{"id": 1, "description": "タスク2", "dependencies": [0]}}]`
 
 リクエスト: 「{main_goal}」
 分解されたサブタスクのJSON:
 """
-        response = call_llm_with_retry(  # <-- 変更なし (呼び出し元は同じ)
-            client=self.client,
-            model="gpt-4o",
+        response = call_llm_with_retry(
+            model="openai/gpt-4o",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
+            temperature=0.5,
             response_format={"type": "json_object"},
         )
         try:
@@ -54,6 +54,7 @@ class DynamicPlanner:
             print(f"タスク分解のJSONパースに失敗: {e}")
             return []
 
+    @observe()
     def _refine_plan(self, trigger_reason: str):
         """現在の進捗と失敗理由に基づき、計画を動的に修正する"""
         print(f"\n[!!!] Planner: {trigger_reason} のため、計画の再評価と修正を開始します...")
@@ -77,8 +78,7 @@ class DynamicPlanner:
 # 修正後の新しい計画（JSON配列）:
 """
         response = call_llm_with_retry(
-            client=self.client,
-            model="gpt-4o",
+            model="openai/gpt-4o",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
             response_format={"type": "json_object"},
@@ -94,6 +94,7 @@ class DynamicPlanner:
         except (json.JSONDecodeError, ValueError) as e:
             print(f"計画修正のJSONパースに失敗しました: {e}")
 
+    @observe()
     def _execute_task_wrapper(self, task: dict):
         """Actorの生成と実行をラップし、並列処理で呼び出せるようにする"""
         try:
@@ -118,6 +119,7 @@ class DynamicPlanner:
             print(f"  ▶ [ERROR] {error_message}")
             return task["id"], error_message
 
+    @observe(name="Aime-Workflow")
     def run(self, main_goal: str):
         self.main_goal = main_goal
         print(f"=== Aimeフレームワーク実行開始: {self.main_goal} ===")
@@ -166,20 +168,34 @@ class DynamicPlanner:
                     if future.done():
                         task_id = active_futures[future]
                         try:
-                            _task_id, result = future.result()
-                            task_failed = (
-                                "実行中に予期せぬエラーが発生しました" in result or "最大ターン数に達しました" in result
-                            )
+                            _task_id, result_str = future.result()
 
-                            if task_failed:
-                                status = "failed"
-                                self.progress_manager.update_task_status(task_id, status, result)
-                                self._refine_plan(
-                                    f"タスク {task_id} ('{self.progress_manager.tasks[task_id]['description']}') が失敗しました。"
-                                )
-                            else:
-                                status = "completed"
-                                self.progress_manager.update_task_status(task_id, status, result)
+                            try:
+                                # Actorからの報告をJSONとしてパース
+                                report = json.loads(result_str)
+                                status = report.get("status")
+                                message = report.get("message", "メッセージがありません。")
+
+                                if status == "success":
+                                    print(f"  ▶ タスク {task_id} は成功しました。")
+                                    self.progress_manager.update_task_status(task_id, "completed", message)
+                                elif status == "failure":
+                                    print(f"  ▶ [!] タスク {task_id} は失敗と報告されました。計画を修正します。")
+                                    self.progress_manager.update_task_status(task_id, "failed", message)
+                                    self._refine_plan(
+                                        f"タスク {task_id} ('{self.progress_manager.tasks[task_id]['description']}') が失敗しました。報告された理由: {message}"
+                                    )
+                                else:
+                                    # statusキーが不正な場合も失敗とみなし、再計画
+                                    print(f"  ▶ [WARN] タスク {task_id} から不正なステータス '{status}' が報告されました。")
+                                    self.progress_manager.update_task_status(task_id, "failed", f"不正な報告: {result_str}")
+                                    self._refine_plan(f"タスク {task_id} が不正な形式の報告を行いました: {result_str}")
+
+                            except json.JSONDecodeError:
+                                # JSONパースに失敗した場合、結果全体を失敗メッセージとして扱い再計画
+                                print(f"  ▶ [WARN] タスク {task_id} の結果がJSON形式ではありません。失敗として扱います。")
+                                self.progress_manager.update_task_status(task_id, "failed", result_str)
+                                self._refine_plan(f"タスク {task_id} がJSON形式でない不正な報告を行いました: {result_str}")
 
                         except Exception as exc:
                             print(f"  ▶ [ERROR] タスク {task_id} の実行で致命的な例外: {exc}")
@@ -214,6 +230,7 @@ class DynamicPlanner:
         print(final_report)
         print("--------------------")
 
+    @observe()
     def _generate_final_report(self, main_goal: str):
         """全てのサブタスクの結果を統合して最終報告書を作成する"""
         results_context = ""
@@ -231,7 +248,9 @@ class DynamicPlanner:
 
 # 最終報告書 (Markdown形式)
 """
-        response = self.client.chat.completions.create(
-            model="gpt-4o", messages=[{"role": "user", "content": prompt}], temperature=0.2
+        response = call_llm_with_retry(
+            model="openai/gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
         )
         return response.choices[0].message.content
