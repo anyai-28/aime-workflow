@@ -167,3 +167,12 @@ class ProgressManagementModule:
                     for log_entry in task["logs"]:
                         print(f"    📝 Log: {log_entry}")
             print("-----------------------\n")
+
+    def get_completed_task_results(self, task_ids: list[int]) -> dict:
+        """指定されたIDの完了済みタスクの結果を辞書で返す"""
+        with self._lock:
+            results = {}
+            for task in self.tasks:
+                if task["id"] in task_ids and task["status"] == "completed":
+                    results[task["id"]] = task.get("result")
+            return results

@@ -1,41 +1,70 @@
 import json
 import time
 import os
+from typing import List, Dict, Any
+from graphlib import TopologicalSorter, CycleError
 from progress_manager import ProgressManagementModule
 from factory import ActorFactory
 from concurrent.futures import ThreadPoolExecutor
 from langfuse import observe
+from config import config
+from llm_client import llm_client
 
-from utils import call_llm_with_retry
+from pydantic import BaseModel
+from typing import List
+
+
+class Task(BaseModel):
+    id: int
+    description: str
+    dependencies: List[int]
+
+
+class TasksList(BaseModel):
+    tasks: List[Task]
 
 
 class DynamicPlanner:
-    def __init__(self, max_parallel_actors: int = 4):
+    """
+    動的プランナー - タスクの分解、実行、調整を行う中央オーケストレーター
+    """
+
+    def __init__(self, max_parallel_actors: int = None):
+        """
+        プランナーを初期化
+
+        Args:
+            max_parallel_actors: 最大並列アクター数（Noneの場合はconfig値を使用）
+        """
         self.progress_manager = ProgressManagementModule()
         self.factory = ActorFactory(self.progress_manager)
-        self.results_dir = "task_results"
-        self.max_parallel_actors = max_parallel_actors
+        self.results_dir = config.results_dir
+        self.max_parallel_actors = max_parallel_actors or config.max_parallel_actors
         self.main_goal = ""
 
     @observe()
-    def _decompose_task(self, main_goal: str) -> list[dict]:
-        """LLMを使い、依存関係を含むサブタスクのリストに分解する"""
+    def _decompose_task(self, main_goal: str) -> List[Dict[str, Any]]:
+        """
+        LLMを使い、依存関係を含むサブタスクのリストに分解する
+
+        Args:
+            main_goal: 分解対象のメインゴール
+
+        Returns:
+            サブタスクのリスト（id, description, dependencies含む）
+        """
         prompt = f"""
 ユーザーの複雑なリクエストを、実行可能なサブタスクのリストに細分化してください。
 各サブタスクには一意のIDを0から振り、他のタスクに依存する場合はそのIDをリストで指定してください。
 依存関係がなければ空リスト `[]` とします。タスクは論理的な順序で定義してください。
 タスクは必ず複数に分解して定義してください。
-出力は以下のJSON形式の配列でなければなりません:
-`[{{"id": 0, "description": "タスク1", "dependencies": []}}, {{"id": 1, "description": "タスク2", "dependencies": [0]}}]`
 
 リクエスト: 「{main_goal}」
-分解されたサブタスクのJSON:
 """
-        response = call_llm_with_retry(
-            model="openai/gpt-4o",
+        response = llm_client.completion(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.5,
-            response_format={"type": "json_object"},
+            response_format=TasksList,
         )
         try:
             data = json.loads(response.choices[0].message.content)
@@ -45,18 +74,51 @@ class DynamicPlanner:
             if isinstance(data, dict):
                 # 辞書の場合、値にリストが含まれていればそれを返す
                 for key, value in data.items():
-                    if not key == "dependencies":
-                        if isinstance(value, list):
-                            print(f"  [Planner] JSONオブジェクトからキー '{key}' のリストを抽出しました。")
-                            return value
+                    if key != "dependencies" and isinstance(value, list):
+                        print(f"  [Planner] JSONオブジェクトからキー '{key}' のリストを抽出しました。")
+                        return value
             raise ValueError("JSONが期待されるリスト形式ではありません。")
         except (json.JSONDecodeError, ValueError) as e:
             print(f"タスク分解のJSONパースに失敗: {e}")
             return []
 
+    def _validate_and_sort_plan(self, tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        トポロジカルソートを用いてタスクリストを依存関係順に並び替え、循環依存を検出する。
+        """
+        print("  [Planner] 新しい計画の依存関係を検証し、トポロジカルソートを実行します...")
+        try:
+            task_map = {task["id"]: task for task in tasks}
+
+            # 依存関係グラフを構築
+            graph = {task_id: set(task.get("dependencies", [])) for task_id, task in task_map.items()}
+
+            # トポロジカルソートを実行
+            ts = TopologicalSorter(graph)
+            sorted_task_ids = list(ts.static_order())
+
+            # ソートされた順序に基づいてタスクリストを再構築
+            sorted_tasks = [task_map[task_id] for task_id in sorted_task_ids]
+
+            print("  [Planner] トポロジカルソートが正常に完了しました。")
+            return sorted_tasks
+
+        except CycleError as e:
+            print(f"  [WARN] 計画に循環依存が検出されました: {e}。LLMによる元の計画をそのまま使用します。")
+            # 循環依存がある場合は、修正せずに元のリストを返す（さらなる改善として、再計画を促すことも可能）
+            return tasks
+        except Exception as e:
+            print(f"  [ERROR] 計画のソート中に予期せぬエラーが発生しました: {e}")
+            return tasks
+
     @observe()
     def _refine_plan(self, trigger_reason: str):
-        """現在の進捗と失敗理由に基づき、計画を動的に修正する"""
+        """
+        現在の進捗と失敗理由に基づき、計画を動的に修正する
+
+        Args:
+            trigger_reason: 再計画のトリガーとなった理由
+        """
         print(f"\n[!!!] Planner: {trigger_reason} のため、計画の再評価と修正を開始します...")
 
         progress_context = self.progress_manager.get_progress_summary()
@@ -65,6 +127,7 @@ class DynamicPlanner:
 あなたはプロジェクトマネージャーAIです。以下の初期目標と現在の進捗状況、そして再計画のトリガーとなった理由を考慮して、残りの計画を最適化してください。
 タスクの追加、変更、削除が可能です。出力は以前と同じJSON形式（IDと依存関係を含む）で、"completed"ステータスのタスクはそのまま含めてください。
 失敗したタスクは、代替案のタスクを新たに追加するか、修正して再試行できるようにしてください。
+代替案のタスクは必要に応じて実施順番を入れ替えてください。
 
 # 初期目標
 {self.main_goal}
@@ -77,19 +140,21 @@ class DynamicPlanner:
 
 # 修正後の新しい計画（JSON配列）:
 """
-        response = call_llm_with_retry(
-            model="openai/gpt-4o",
+        response = llm_client.completion(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
-            response_format={"type": "json_object"},
+            response_format=TasksList,
         )
         try:
             new_plan = json.loads(response.choices[0].message.content)
             if isinstance(new_plan, dict) and "tasks" in new_plan:
                 new_plan = new_plan["tasks"]
 
-            print("--- 新しい計画が生成されました ---")
-            self.progress_manager.update_tasks(new_plan)
+            # LLMが生成した計画を検証・ソートする
+            sorted_plan = self._validate_and_sort_plan(new_plan)
+
+            print("--- 新しい計画が生成・ソートされました ---")
+            self.progress_manager.update_tasks(sorted_plan)
             print("--- タスクリストが新しい計画で更新されました ---")
         except (json.JSONDecodeError, ValueError) as e:
             print(f"計画修正のJSONパースに失敗しました: {e}")
@@ -98,9 +163,20 @@ class DynamicPlanner:
     def _execute_task_wrapper(self, task: dict):
         """Actorの生成と実行をラップし、並列処理で呼び出せるようにする"""
         try:
-            # Phase 2-1: Actorのインスタンス化
+            # 依存タスクの結果を収集し、前提知識としてコンテキストを作成
+            knowledge_context = f"最終目標: {self.main_goal}\n"
+            if task.get("dependencies"):
+                completed_results = self.progress_manager.get_completed_task_results(task["dependencies"])
+                if completed_results:
+                    knowledge_context += "\n# 前提となる関連タスクの結果:\n"
+                    for dep_id, result in completed_results.items():
+                        # 結果が長すぎる場合、500文字に要約
+                        result_summary = result if len(str(result)) < 500 else f"{str(result)[:500]}..."
+                        knowledge_context += f"## タスク{dep_id}の結果概要:\n{result_summary}\n\n"
+
+            # Phase 2-1: Actorのインスタンス化 (knowledge_contextを渡す)
             print(f"  ▶ Actor Factory: タスク '{task['description']}' のActorを生成中...")
-            actor = self.factory.create_actor(task)
+            actor = self.factory.create_actor(task, knowledge_context.strip())
 
             # Phase 2-2: Actorの実行
             print(f"  ▶ Dynamic Actor: タスク '{task['description']}' の実行を開始します...")
@@ -231,8 +307,16 @@ class DynamicPlanner:
         print("--------------------")
 
     @observe()
-    def _generate_final_report(self, main_goal: str):
-        """全てのサブタスクの結果を統合して最終報告書を作成する"""
+    def _generate_final_report(self, main_goal: str) -> str:
+        """
+        全てのサブタスクの結果を統合して最終報告書を作成する
+
+        Args:
+            main_goal: メインゴール
+
+        Returns:
+            Markdown形式の最終報告書
+        """
         results_context = ""
         for task in self.progress_manager.tasks:
             results_context += f"## サブタスク「{task['description']}」\n\n**ステータス:** {task['status']}\n**結果:**\n{task.get('result', 'N/A')}\n\n---\n"
@@ -248,8 +332,7 @@ class DynamicPlanner:
 
 # 最終報告書 (Markdown形式)
 """
-        response = call_llm_with_retry(
-            model="openai/gpt-4o",
+        response = llm_client.completion(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
         )
