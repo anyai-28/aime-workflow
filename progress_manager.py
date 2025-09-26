@@ -22,11 +22,11 @@ class ProgressManagementModule:
         md_content = "# Aime Framework Task Progress\n\n"
         for task in self.tasks:
             if task["status"] == "completed":
-                marker = "[x]"
+                marker = "✅"
             elif task["status"] == "in_progress":
                 marker = "[-]"
             elif task["status"] == "failed":
-                marker = "[//]"
+                marker = "❌"
             else:  # pending
                 marker = "[ ]"
             md_content += f"- {marker} {task['description']}\n"
