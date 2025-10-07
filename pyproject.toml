@@ -1,8 +1,9 @@
 [project]
 name = "aime"
 version = "0.1.0"
-description = "Add your description here"
+description = "Autonomous Intelligent Multi-agent Execution Framework - A dynamic multi-agent collaboration framework"
 readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.12"
 dependencies = [
     "duckduckgo-search>=8.1.1",
