@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Any
 import litellm
 from litellm import RateLimitError
 from langfuse import observe
-from config import config
+from aime.config import config
 
 
 class LLMClient:

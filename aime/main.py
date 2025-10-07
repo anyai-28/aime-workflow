@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from langfuse.langchain import CallbackHandler
 from litellm import success_callback
-from planner import DynamicPlanner
+from aime.planner import DynamicPlanner
 
 
 def main():

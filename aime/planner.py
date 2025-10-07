@@ -3,12 +3,12 @@ import time
 import os
 from typing import List, Dict, Any
 from graphlib import TopologicalSorter, CycleError
-from progress_manager import ProgressManagementModule
-from factory import ActorFactory
+from aime.progress_manager import ProgressManagementModule
+from aime.factory import ActorFactory
 from concurrent.futures import ThreadPoolExecutor
 from langfuse import observe
-from config import config
-from llm_client import llm_client
+from aime.config import config
+from aime.llm_client import llm_client
 
 from pydantic import BaseModel
 from typing import List

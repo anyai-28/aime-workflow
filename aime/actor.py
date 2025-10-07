@@ -1,8 +1,8 @@
 import re
 from typing import Dict, Any
 from langfuse import observe
-from config import config
-from llm_client import llm_client
+from aime.config import config
+from aime.llm_client import llm_client
 
 
 class DynamicActor:

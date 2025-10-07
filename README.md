@@ -153,19 +153,19 @@ GOOGLE_CSE_ID="xxx"
 
 ## 🏃‍♀️ 実行方法
 
-`main.py`内の`user_request`を解決したいタスクに変更し、スクリプトを実行します。
+`aime/main.py`内の`user_request`を解決したいタスクに変更し、スクリプトを実行します。
 
 ```python
-# main.py
-from planner import DynamicPlanner
+# aime/main.py
+from aime.planner import DynamicPlanner
 
 def main():
     """メイン実行関数"""
     # .envファイルから環境変数を読み込む
     load_dotenv()
-    
+
     # ... Langfuseのセットアップ ...
-    
+
     # AimeのDynamic Plannerを初期化
     planner = DynamicPlanner()
 
@@ -184,7 +184,7 @@ if __name__ == "__main__":
 実行コマンド：
 
 ```bash
-python main.py
+python -m aime.main
 ```
 
 実行が完了すると、`final_report.md`に最終成果物が、`progress.md`にタスクの実行進捗が出力されます。
@@ -193,13 +193,20 @@ python main.py
 
 ```text
 .
-├── main.py               # フレームワークの実行エントリーポイント
-├── planner.py            # DynamicPlanner: 全体のオーケストレーター
-├── actor.py              # DynamicActor: サブタスクを実行するエージェント
-├── factory.py            # ActorFactory: エージェントを生成する工場
-├── progress_manager.py   # ProgressManagementModule: 全体の進捗を管理
-├── tools.py              # Web検索などのエージェントが利用するツール群
-├── llm_client.py         # LLM API呼び出しを管理するクライアント
-├── config.py             # システム全体の設定を管理
+├── aime/                 # メインパッケージ
+│   ├── __init__.py       # パッケージ初期化
+│   ├── main.py           # フレームワークの実行エントリーポイント
+│   ├── planner.py        # DynamicPlanner: 全体のオーケストレーター
+│   ├── actor.py          # DynamicActor: サブタスクを実行するエージェント
+│   ├── factory.py        # ActorFactory: エージェントを生成する工場
+│   ├── progress_manager.py # ProgressManagementModule: 全体の進捗を管理
+│   ├── tools.py          # Web検索などのエージェントが利用するツール群
+│   ├── llm_client.py     # LLM API呼び出しを管理するクライアント
+│   └── config.py         # システム全体の設定を管理
+├── task_results/         # 各サブタスクの実行結果
+├── pyproject.toml        # プロジェクト設定・依存関係
+├── LICENSE               # MITライセンス
+├── README.md             # このファイル
+├── CLAUDE.md             # Claude Code用ガイド
 └── .env                  # 環境変数の設定ファイル (Git管理外)
 ```

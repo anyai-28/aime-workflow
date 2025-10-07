@@ -3,7 +3,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import time
 
-from config import config
+from aime.config import config
 
 
 def web_search(query: str) -> str:

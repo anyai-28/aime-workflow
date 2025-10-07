@@ -1,7 +1,7 @@
-from actor import DynamicActor
-from tools import web_search, finish, reflect, google_search
+from aime.actor import DynamicActor
+from aime.tools import web_search, finish, reflect, google_search
 from langfuse import observe
-from llm_client import llm_client
+from aime.llm_client import llm_client
 
 
 class ActorFactory:
